@@ -1,0 +1,32 @@
+-- Availability Group Dashboard with Key Metrics, ordered by Redo Queue Size (Descending)
+SELECT 
+    ag.name AS [AG Name],
+    ar.replica_server_name AS [Replica Server],
+    db.name AS [Database Name],
+    rcs.role_desc AS [Replica Role],
+    drs.synchronization_state_desc AS [Synchronization State],
+    drs.synchronization_health_desc AS [Synchronization Health],
+    drs.is_commit_participant AS [Is Commit Participant],
+    drs.is_suspended AS [Is Suspended],
+    
+    -- Log Send Queue Size and Rate
+    drs.log_send_queue_size AS [Log Send Queue Size (KB)],
+    drs.log_send_rate AS [Log Send Rate (KB/sec)],
+
+    -- Redo Queue Size and Rate
+    drs.redo_queue_size AS [Redo Queue Size (KB)],
+    drs.redo_rate AS [Redo Rate (KB/sec)],
+
+    -- Last Hardened and Commit LSNs for detailed analysis
+    drs.last_hardened_lsn AS [Last Hardened LSN],
+    drs.last_commit_lsn AS [Last Commit LSN]
+    
+FROM sys.availability_groups ag
+JOIN sys.availability_replicas ar ON ag.group_id = ar.group_id
+JOIN sys.dm_hadr_availability_replica_states rcs ON ar.replica_id = rcs.replica_id
+JOIN sys.dm_hadr_database_replica_states drs ON rcs.replica_id = drs.replica_id
+JOIN sys.databases db ON drs.database_id = db.database_id
+ORDER BY drs.redo_queue_size DESC, 
+         ag.name, 
+         ar.replica_server_name, 
+         db.name;
