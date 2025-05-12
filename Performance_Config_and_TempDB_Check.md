@@ -1,4 +1,4 @@
-# Performance_Config_and_TempDB_Check.sql
+# Performance Configuration and TempDB Check
   # Description
 This script helps database administrators quickly assess key SQL Server configuration settings that impact query performance and TempDB efficiency. 
   It’s useful during performance tuning, environment baselining, or SQL Server health checks.
