@@ -1,0 +1,29 @@
+-- SQL to list all logins that are members of the 'sysadmin' fixed server role
+-- This query retrieves a list of SQL Server logins that are members of the sysadmin server role
+--   — which grants unrestricted access to the entire SQL Server instance. 
+--     It provides metadata for each login, such as:
+--        Login name
+--        Login type (SQL login, Windows login, group, etc.)
+--        Whether the login is disabled
+--        When the login was created or last modified
+--  The list is sorted alphabetically by login name.
+
+
+SELECT 
+    sp.name AS LoginName,                -- Name of the login (user or group)
+    sp.type_desc AS LoginType,          -- Type of login (e.g., SQL_LOGIN, WINDOWS_LOGIN, WINDOWS_GROUP)
+    sp.is_disabled AS IsDisabled,       -- 1 = login is disabled; 0 = enabled
+    sp.create_date AS CreateDate,       -- When the login was created
+    sp.modify_date AS ModifyDate        -- Last time the login definition was modified
+FROM 
+    sys.server_principals AS sp         -- All server-level security principals (logins)
+INNER JOIN 
+    sys.server_role_members AS srm      -- Mapping between server roles and their members
+    ON sp.principal_id = srm.member_principal_id
+INNER JOIN 
+    sys.server_principals AS srp        -- Server roles
+    ON srm.role_principal_id = srp.principal_id
+WHERE 
+    srp.name = 'sysadmin'               -- Filter for logins that belong to the sysadmin role
+ORDER BY 
+    sp.name;                            -- Sort results alphabetically by login name
