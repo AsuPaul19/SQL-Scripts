@@ -1,0 +1,309 @@
+-- SQL Server Diagnostic Memory Queries
+-- Glenn Berry
+-- https://glennsqlperformance.com/ 
+
+
+-- YouTube: https://bit.ly/2PkoAM1 
+-- Twitter: GlennAlanBerry
+
+
+-- Good basic information about OS memory amounts and state  (Query 1) (System Memory)
+SELECT total_physical_memory_kb/1024 AS [Physical Memory (MB)], 
+       available_physical_memory_kb/1024 AS [Available Memory (MB)], 
+       total_page_file_kb/1024 AS [Page File Commit Limit (MB)],
+	   total_page_file_kb/1024 - total_physical_memory_kb/1024 AS [Physical Page File Size (MB)],
+	   available_page_file_kb/1024 AS [Available Page File (MB)], 
+	   system_cache_kb/1024 AS [System Cache (MB)],
+       system_memory_state_desc AS [System Memory State]
+FROM sys.dm_os_sys_memory WITH (NOLOCK) OPTION (RECOMPILE);
+------
+
+
+-- You want to see "Available physical memory is high" for System Memory State
+-- This indicates that you are not under external memory pressure
+
+
+-- Possible System Memory State values:
+-- Available physical memory is high
+-- Physical memory usage is steady
+-- Available physical memory is low
+-- Available physical memory is running low
+-- Physical memory state is transitioning
+
+
+-- sys.dm_os_sys_memory (Transact-SQL)
+-- https://bit.ly/2pcV0xq
+
+
+
+
+-- Get max server memory value for instance  (Query 2) (Max Server Memory)
+SELECT [name], [value], value_in_use, minimum, maximum, [description]
+FROM sys.configurations WITH (NOLOCK)
+WHERE [name] = N'max server memory (MB)' OPTION (RECOMPILE);
+------
+
+
+-- max server memory (MB) (set to an appropriate value, not the default)
+
+
+-- sys.configurations (Transact-SQL)
+-- https://bit.ly/2HsyDZI
+
+
+
+
+
+
+-- SQL Server Process Address space info  (Query 3) (Process Memory)
+-- (shows whether locked pages is enabled, among other things)
+SELECT physical_memory_in_use_kb/1024 AS [SQL Server Memory Usage (MB)],
+	   locked_page_allocations_kb/1024 AS [SQL Server Locked Pages Allocation (MB)],
+       large_page_allocations_kb/1024 AS [SQL Server Large Pages Allocation (MB)], 
+	   page_fault_count, memory_utilization_percentage, available_commit_limit_kb, 
+	   process_physical_memory_low, process_virtual_memory_low
+FROM sys.dm_os_process_memory WITH (NOLOCK) OPTION (RECOMPILE);
+------
+
+
+-- You want to see 0 for process_physical_memory_low
+-- You want to see 0 for process_virtual_memory_low
+-- If locked_page_allocations_kb > 0, then LPIM is enabled
+
+
+-- sys.dm_os_process_memory (Transact-SQL)
+-- https://bit.ly/3iUgQgC
+
+
+-- How to enable the "locked pages" feature in SQL Server 2012
+-- https://bit.ly/2F5UjOA
+
+
+-- Memory Management Architecture Guide
+-- https://bit.ly/2JKkadC 
+
+
+
+
+-- Page Life Expectancy (PLE) value for each NUMA node in current instance  (Query 4) (PLE by NUMA Node)
+SELECT @@SERVERNAME AS [Server Name], RTRIM([object_name]) AS [Object Name], 
+       instance_name, cntr_value AS [Page Life Expectancy]
+FROM sys.dm_os_performance_counters WITH (NOLOCK)
+WHERE [object_name] LIKE N'%Buffer Node%' -- Handles named instances
+AND counter_name = N'Page life expectancy' OPTION (RECOMPILE);
+------
+
+
+-- PLE is a good measurement of internal memory pressure
+-- Higher PLE is better. Watch the trend over time, not the absolute value at any point
+-- This will only return one row for non-NUMA systems
+
+
+-- Page Life Expectancy isn�t what you think�
+-- https://bit.ly/2EgynLa
+
+
+
+
+
+
+-- Get total buffer usage by database for current instance  (Query 5) (Total Buffer Usage by Database)
+-- This may take some time to run on a busy instance with lots of RAM
+WITH AggregateBufferPoolUsage
+AS
+(SELECT DB_NAME(database_id) AS [Database Name],
+CAST(COUNT_BIG(*) * 8/1024.0 AS DECIMAL (15,2)) AS [CachedSize],
+COUNT(page_id) AS [Page Count],
+AVG(read_microsec) AS [Avg Read Time (microseconds)]
+FROM sys.dm_os_buffer_descriptors WITH (NOLOCK)
+GROUP BY DB_NAME(database_id))
+SELECT ROW_NUMBER() OVER(ORDER BY CachedSize DESC) AS [Buffer Pool Rank], [Database Name], 
+       CAST(CachedSize / SUM(CachedSize) OVER() * 100.0 AS DECIMAL(5,2)) AS [Buffer Pool Percent],
+       [Page Count], CachedSize AS [Cached Size (MB)], [Avg Read Time (microseconds)]
+FROM AggregateBufferPoolUsage
+ORDER BY [Buffer Pool Rank] OPTION (RECOMPILE);
+------
+
+
+-- Tells you how much memory (in the buffer pool) 
+-- is being used by each database on the instance
+
+
+-- sys.dm_os_buffer_descriptors (Transact-SQL)
+-- https://bit.ly/36s7aFo
+
+
+
+
+
+
+-- Memory Grants Pending value for current instance  (Query 6) (Memory Grants Pending)
+SELECT @@SERVERNAME AS [Server Name], RTRIM([object_name]) AS [Object Name], cntr_value AS [Memory Grants Pending]                                                                                                       
+FROM sys.dm_os_performance_counters WITH (NOLOCK)
+WHERE [object_name] LIKE N'%Memory Manager%' -- Handles named instances
+AND counter_name = N'Memory Grants Pending' OPTION (RECOMPILE);
+------
+
+
+-- Run multiple times, and run periodically if you suspect you are under memory pressure
+-- Memory Grants Pending above zero for a sustained period is a very strong indicator of internal memory pressure
+
+
+
+
+-- Memory Clerk Usage for instance  (Query 7) (Memory Clerk Usage)
+-- Look for high value for CACHESTORE_SQLCP (Ad-hoc query plans)
+SELECT TOP(10) mc.[type] AS [Memory Clerk Type], 
+       CAST((SUM(mc.pages_kb)/1024.0) AS DECIMAL (15,2)) AS [Memory Usage (MB)] 
+FROM sys.dm_os_memory_clerks AS mc WITH (NOLOCK)
+GROUP BY mc.[type]  
+ORDER BY SUM(mc.pages_kb) DESC OPTION (RECOMPILE);
+------
+
+
+-- MEMORYCLERK_SQLBUFFERPOOL was new for SQL Server 2012. It should be your highest consumer of memory
+
+
+-- CACHESTORE_SQLCP - SQL Plans         
+-- These are cached SQL statements or batches that aren't in stored procedures, functions and triggers
+-- Watch out for high values for CACHESTORE_SQLCP
+-- Enabling 'optimize for ad hoc workloads' at the instance level can help reduce this
+-- Running DBCC FREESYSTEMCACHE ('SQL Plans'); periodically may be required to better control this
+
+
+-- CACHESTORE_OBJCP - Object Plans      
+-- These are compiled plans for stored procedures, functions and triggers
+
+
+-- If you see very high usage by MEMORYCLERK_SQLLOGPOOL
+-- SQL Server 2019 CU9 added a new command, DBCC FREESYSTEMCACHE ('LogPool');
+
+
+-- sys.dm_os_memory_clerks (Transact-SQL)
+-- https://bit.ly/2H31xDR
+
+
+
+
+-- Database-Specific Queries **********************************************************************************
+
+
+-- Get top total logical reads queries for current database (Query 8) (Top Logical Reads Queries)
+SELECT TOP(50) DB_NAME(t.[dbid]) AS [Database Name],
+REPLACE(REPLACE(LEFT(t.[text], 255), CHAR(10),''), CHAR(13),'') AS [Short Query Text], 
+qs.total_logical_reads AS [Total Logical Reads],
+qs.min_logical_reads AS [Min Logical Reads],
+qs.total_logical_reads/qs.execution_count AS [Avg Logical Reads],
+qs.max_logical_reads AS [Max Logical Reads],   
+qs.min_worker_time AS [Min Worker Time],
+qs.total_worker_time/qs.execution_count AS [Avg Worker Time], 
+qs.max_worker_time AS [Max Worker Time], 
+qs.min_elapsed_time AS [Min Elapsed Time], 
+qs.total_elapsed_time/qs.execution_count AS [Avg Elapsed Time], 
+qs.max_elapsed_time AS [Max Elapsed Time],
+qs.execution_count AS [Execution Count], 
+CASE WHEN CONVERT(nvarchar(max), qp.query_plan) COLLATE Latin1_General_BIN2 LIKE N'%<MissingIndexes>%' THEN 1 ELSE 0 END AS [Has Missing Index],
+qs.creation_time AS [Creation Time]
+,t.[text] AS [Complete Query Text], qp.query_plan AS [Query Plan] -- if you want the Query Plan and complete query text
+FROM sys.dm_exec_query_stats AS qs WITH (NOLOCK)
+CROSS APPLY sys.dm_exec_sql_text(plan_handle) AS t 
+CROSS APPLY sys.dm_exec_query_plan(plan_handle) AS qp
+WHERE t.dbid = DB_ID()
+ORDER BY qs.total_logical_reads DESC OPTION (RECOMPILE);
+------
+
+
+-- Helps you find the most expensive queries from a memory perspective across the entire instance
+-- Can also help track down parameter sniffing issues
+
+
+
+
+-- Top Cached SPs By Total Logical Reads. Logical reads relate to memory pressure  (Query 9) (SP Logical Reads)
+SELECT TOP(25) p.name AS [SP Name], qs.total_logical_reads AS [TotalLogicalReads], 
+qs.total_logical_reads/qs.execution_count AS [AvgLogicalReads],qs.execution_count, 
+ISNULL(qs.execution_count/DATEDIFF(Minute, qs.cached_time, GETDATE()), 0) AS [Calls/Minute], 
+qs.total_elapsed_time, qs.total_elapsed_time/qs.execution_count AS [avg_elapsed_time],
+CASE WHEN CONVERT(nvarchar(max), qp.query_plan) COLLATE Latin1_General_BIN2 LIKE N'%<MissingIndexes>%' THEN 1 ELSE 0 END AS [Has Missing Index],
+FORMAT(qs.last_execution_time, 'yyyy-MM-dd HH:mm:ss', 'en-US') AS [Last Execution Time], 
+FORMAT(qs.cached_time, 'yyyy-MM-dd HH:mm:ss', 'en-US') AS [Plan Cached Time]
+,qp.query_plan AS [Query Plan] -- Uncomment if you want the Query Plan
+FROM sys.procedures AS p WITH (NOLOCK)
+INNER JOIN sys.dm_exec_procedure_stats AS qs WITH (NOLOCK)
+ON p.[object_id] = qs.[object_id]
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) AS qp
+WHERE qs.database_id = DB_ID()
+AND DATEDIFF(Minute, qs.cached_time, GETDATE()) > 0
+ORDER BY qs.total_logical_reads DESC OPTION (RECOMPILE);
+------
+
+
+-- This helps you find the most expensive cached stored procedures from a memory perspective
+-- You should look at this if you see signs of memory pressure
+
+
+
+
+
+
+-- Get Schema names, Table names, object size, row counts, and compression status for clustered index or heap  (Query 10) (Table Sizes)
+SELECT SCHEMA_NAME(o.Schema_ID) AS [Schema Name], OBJECT_NAME(p.object_id) AS [Object Name],
+CAST(SUM(ps.reserved_page_count) * 8.0 / 1024 AS DECIMAL(19,2)) AS [Object Size (MB)],
+SUM(p.Rows) AS [Row Count], 
+p.data_compression_desc AS [Compression Type]
+FROM sys.objects AS o WITH (NOLOCK)
+INNER JOIN sys.partitions AS p WITH (NOLOCK)
+ON p.object_id = o.object_id
+INNER JOIN sys.dm_db_partition_stats AS ps WITH (NOLOCK)
+ON p.object_id = ps.object_id
+WHERE ps.index_id < 2 -- ignore the partitions from the non-clustered indexes if any
+AND p.index_id < 2    -- ignore the partitions from the non-clustered indexes if any
+AND o.type_desc = N'USER_TABLE'
+GROUP BY  SCHEMA_NAME(o.Schema_ID), p.object_id, ps.reserved_page_count, p.data_compression_desc
+ORDER BY SUM(ps.reserved_page_count) DESC, SUM(p.Rows) DESC OPTION (RECOMPILE);
+
+
+
+
+
+
+-- Breaks down buffers used by current database by object (table, index) in the buffer cache  (Query 11) (Buffer Usage)
+-- Note: This query could take some time on a busy instance
+SELECT fg.name AS [Filegroup Name], SCHEMA_NAME(o.Schema_ID) AS [Schema Name],
+OBJECT_NAME(p.[object_id]) AS [Object Name], p.index_id, 
+CAST(COUNT(*)/128.0 AS DECIMAL(10, 2)) AS [Buffer size(MB)],  
+COUNT(*) AS [BufferCount], p.[Rows] AS [Row Count],
+p.data_compression_desc AS [Compression Type]
+FROM sys.allocation_units AS a WITH (NOLOCK)
+INNER JOIN sys.dm_os_buffer_descriptors AS b WITH (NOLOCK)
+ON a.allocation_unit_id = b.allocation_unit_id
+INNER JOIN sys.partitions AS p WITH (NOLOCK)
+ON a.container_id = p.hobt_id
+INNER JOIN sys.objects AS o WITH (NOLOCK)
+ON p.object_id = o.object_id
+INNER JOIN sys.database_files AS f WITH (NOLOCK)
+ON b.file_id = f.file_id
+INNER JOIN sys.filegroups AS fg WITH (NOLOCK)
+ON f.data_space_id = fg.data_space_id
+WHERE b.database_id = CONVERT(int, DB_ID())
+AND p.[object_id] > 100
+AND OBJECT_NAME(p.[object_id]) NOT LIKE N'plan_%'
+AND OBJECT_NAME(p.[object_id]) NOT LIKE N'sys%'
+AND OBJECT_NAME(p.[object_id]) NOT LIKE N'xml_index_nodes%'
+GROUP BY fg.name, o.Schema_ID, p.[object_id], p.index_id, 
+         p.data_compression_desc, p.[Rows]
+ORDER BY [BufferCount] DESC OPTION (RECOMPILE);
+------
+
+
+-- Tells you what tables and indexes are using the most memory in the buffer cache
+-- It can help identify possible candidates for data compression
+------
+
+
+-- Gives you an idea of table sizes, and possible data compression opportunities
+
+
+-- Estimating Data Compression Savings in SQL Server
+-- https://www.youtube.com/watch?v=P6P9Jh4ihK0
+-- https://glennsqlperformance.com/2020/12/04/estimating-data-compression-savings-in-sql-server/
