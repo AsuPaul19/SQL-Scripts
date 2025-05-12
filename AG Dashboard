@@ -1,4 +1,77 @@
--- Availability Group Dashboard with Key Metrics, ordered by Redo Queue Size (Descending)
+CREATE OR ALTER PROCEDURE dbo.usp_AG_HealthDashboard
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Purpose: Returns a snapshot of key metrics for databases in Availability Groups,
+    --          focusing on SECONDARY replicas and ordered by Redo Queue Size (lag).
+    --          Avoids duplicates using DISTINCT and defensive join filtering.
+
+    SELECT DISTINCT  -- Prevent duplicate rows in case of join mismatches or transient states
+        GETDATE() AS [Snapshot Time],  -- Timestamp to indicate when the data was collected
+
+        -- Core identification columns
+        ag.name AS [AG Name],                     -- Name of the Availability Group
+        ar.replica_server_name AS [Replica Server], -- Name of the replica server
+        db.name AS [Database Name],               -- Name of the database in the AG
+
+        -- Replica status information
+        rcs.role_desc AS [Replica Role],          -- Role (PRIMARY or SECONDARY)
+        drs.synchronization_state_desc AS [Synchronization State],  -- Current synchronization state
+        drs.synchronization_health_desc AS [Synchronization Health],-- Health of synchronization
+        drs.is_commit_participant AS [Is Commit Participant],       -- Indicates if this replica participates in commit quorum
+        drs.is_suspended AS [Is Suspended],                         -- Indicates if data movement is suspended
+
+        -- Log send metrics (from primary to secondary)
+        ISNULL(drs.log_send_queue_size, 0) AS [Log Send Queue Size (KB)],  -- Amount of unsent log (KB)
+        ISNULL(drs.log_send_rate, 0) AS [Log Send Rate (KB/sec)],          -- Rate of log send
+
+        -- Redo metrics (on the secondary)
+        ISNULL(drs.redo_queue_size, 0) AS [Redo Queue Size (KB)],  -- Amount of log not yet redone
+        ISNULL(drs.redo_rate, 0) AS [Redo Rate (KB/sec)],          -- Rate at which redo is occurring
+
+        -- Log sequence tracking
+        drs.last_hardened_lsn AS [Last Hardened LSN],  -- Last log sequence number hardened to disk
+        drs.last_commit_lsn AS [Last Commit LSN]       -- Last committed LSN on the replica
+
+    FROM sys.availability_groups ag
+    JOIN sys.availability_replicas ar 
+        ON ag.group_id = ar.group_id                       -- Join AG to its replicas
+    JOIN sys.dm_hadr_availability_replica_states rcs 
+        ON ar.replica_id = rcs.replica_id                  -- Get state info per replica
+    JOIN sys.dm_hadr_database_replica_states drs 
+        ON rcs.replica_id = drs.replica_id                 -- Get DB-level replica states
+        AND drs.replica_id = ar.replica_id                 -- Defensive: ensure same replica
+    JOIN sys.databases db 
+        ON drs.database_id = db.database_id                -- Match DB state
+
+    -- Filter to only show SECONDARY replicas that are online and not suspended
+    WHERE 
+        rcs.role_desc = 'SECONDARY'     -- Focus on SECONDARY replicas where lag matters
+        AND drs.is_suspended = 0        -- Skip replicas with suspended data movement
+        AND db.state = 0                -- Only include ONLINE databases
+
+    -- Sort results to highlight replicas with the most redo backlog
+    ORDER BY 
+        drs.redo_queue_size DESC,       -- Primary sort: descending redo queue size
+        ag.name,                        -- Secondary sort: AG name
+        ar.replica_server_name,         -- Then by replica name
+        db.name;                        -- Then by database name
+END;
+GO
+
+------------------------------------------------------------
+EXEC dbo.usp_AG_HealthDashboard;
+GO
+
+
+
+
+
+
+# ggggg
+
+/* -- Availability Group Dashboard with Key Metrics, ordered by Redo Queue Size (Descending)
 SELECT 
     ag.name AS [AG Name],
     ar.replica_server_name AS [Replica Server],
@@ -30,3 +103,4 @@ ORDER BY drs.redo_queue_size DESC,
          ag.name, 
          ar.replica_server_name, 
          db.name;
+*/
