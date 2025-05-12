@@ -1,0 +1,7 @@
+-- SQL to list all the databse on my instance
+SELECT name AS DatabaseName,
+       database_id AS DatabaseID,
+       create_date AS CreationDate,
+       state_desc AS State
+FROM sys.databases
+ORDER BY name;
