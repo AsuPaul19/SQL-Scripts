@@ -1,0 +1,52 @@
+-- #Here's a script to back up all user databases in your SQL Server instance (both FULL and TRANSACTION LOG), I use T-SQL with dynamic SQL and cursors or loops. 
+
+-- # Backup All User Databases – FULL and TRANSACTION LOG
+
+-- Declare variables
+DECLARE @name NVARCHAR(256)      -- database name
+DECLARE @path NVARCHAR(512)      -- backup path
+DECLARE @fileName NVARCHAR(512)  -- full path for backup file
+DECLARE @sql NVARCHAR(MAX)       -- dynamic SQL
+DECLARE @date NVARCHAR(20)       -- formatted date
+
+-- Set the backup directory (update this path)
+SET @path = 'C:\SQLBackups\'  -- Change this to your backup folder
+
+-- Set date format for file naming
+SET @date = REPLACE(CONVERT(VARCHAR(20), GETDATE(), 120), ':', '-')
+SET @date = REPLACE(@date, ' ', '_')
+
+-- Cursor for all user databases (excluding system DBs)
+DECLARE db_cursor CURSOR FOR  
+SELECT name 
+FROM sys.databases 
+WHERE database_id > 4 AND state_desc = 'ONLINE' -- Exclude system DBs
+
+OPEN db_cursor  
+FETCH NEXT FROM db_cursor INTO @name  
+
+WHILE @@FETCH_STATUS = 0  
+BEGIN  
+    -- FULL BACKUP
+    SET @fileName = @path + @name + '_FULL_' + @date + '.bak'
+    SET @sql = 'BACKUP DATABASE [' + @name + '] TO DISK = N''' + @fileName + ''' WITH INIT, COMPRESSION'
+    EXEC sp_executesql @sql
+
+    -- TRANSACTION LOG BACKUP
+    -- Only if recovery model is FULL or BULK_LOGGED
+    IF EXISTS (
+        SELECT 1
+        FROM sys.databases
+        WHERE name = @name AND recovery_model_desc IN ('FULL', 'BULK_LOGGED')
+    )
+    BEGIN
+        SET @fileName = @path + @name + '_LOG_' + @date + '.trn'
+        SET @sql = 'BACKUP LOG [' + @name + '] TO DISK = N''' + @fileName + ''' WITH INIT, COMPRESSION'
+        EXEC sp_executesql @sql
+    END
+
+    FETCH NEXT FROM db_cursor INTO @name  
+END  
+
+CLOSE db_cursor  
+DEALLOCATE db_cursor
