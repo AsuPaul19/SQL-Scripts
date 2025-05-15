@@ -1,4 +1,4 @@
--- #Here's a script to back up all user databases in your SQL Server instance (both FULL and TRANSACTION LOG), I use T-SQL with dynamic SQL and cursors or loops. 
+-- # Here's a script to back up all user databases in your SQL Server instance (both FULL and TRANSACTION LOG), I use T-SQL with dynamic SQL and cursors or loops. 
 
 -- # Backup All User Databases – FULL and TRANSACTION LOG
 
